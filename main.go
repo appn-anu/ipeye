@@ -56,6 +56,7 @@ func stringInSlice(a string, list []string) bool {
 
 // unmarshalExtraTags turns a list of comma separated key=value pairs into a map
 func unmarshalExtraTags(tagString string) (tags map[string]string, err error) {
+	tags = make(map[string]string)
 	for _, pair := range strings.Split(tagString, ","){
 		p := strings.Split(pair, "=")
 		if len(p) != 2 {
@@ -83,6 +84,7 @@ func capture(filePath string) {
 	defer telegrafClient.Close()
 
 	m := telegraf.NewMeasurement("ipcamera")
+	m.AddTag("camera_name", name)
 
 	urlString := os.Getenv("URL")
 	if urlString == "" {
@@ -106,32 +108,39 @@ func capture(filePath string) {
 	st := time.Now()
 	resp, err := netClient.Get(urlString)
 	m.AddFloat64("RequestTime_s", time.Now().Sub(st).Seconds())
+
 	if err != nil {
 		errLog.Println(err)
+		telegrafClient.Write(m)
 		return
 	}
 	m.AddTag("RequestStatus", resp.Status)
 	m.AddInt64("RequestStatusCode", int64(resp.StatusCode))
 
+	if !(resp.StatusCode >= 200 && resp.StatusCode <= 299) {
+		telegrafClient.Write(m)
+		return
+	}
+
 	errLog.Println(resp.Status)
 	contentType := resp.Header["Content-Type"][0]
 	m.AddTag("Content-Type", contentType)
 	var img image.Image
+
+	// todo: check if contentType == IMAGETYPE and write out image without decoding and re-encoding.
 	if contentType == "image/bmp" {
 		st = time.Now()
 		img, err = bmp.Decode(resp.Body)
 		m.AddFloat64("DecodeTime_s", time.Now().Sub(st).Seconds())
 		if err != nil {
-			errLog.Println(err)
-			return
+			panic(err)
 		}
 	} else if stringInSlice(contentType, []string{"image/png", "image/jpg", "image/jpeg"}) {
 		st = time.Now()
 		img, _, err = image.Decode(resp.Body)
 		m.AddFloat64("DecodeTime_s", time.Now().Sub(st).Seconds())
 		if err != nil {
-			errLog.Println(err)
-			return
+			panic(err)
 		}
 	} else {
 		panic(fmt.Errorf("unknown image format %s\n", contentType))
@@ -139,32 +148,28 @@ func capture(filePath string) {
 	st = time.Now()
 	var imageBytes []byte
 	if stringInSlice(os.Getenv("IMAGETYPE"), []string{"jpeg", "jpg", "JPG", "JPEG"}) {
-		if stringInSlice(contentType, []string{"image/png", "image/jpg", "image/jpeg"}) {
-
-		}
 
 		var jpegBytes bytes.Buffer
 		jpegWriter := bufio.NewWriter(&jpegBytes)
 		err = jpeg.Encode(jpegWriter, img, &jpeg.Options{Quality: 90})
-		m.AddFloat64("EncodeTime_s", time.Now().Sub(st).Seconds())
 		if err != nil {
 			panic(err)
 		}
 		jpegWriter.Flush()
 		imageBytes = jpegBytes.Bytes()
-
+		m.AddFloat64("EncodeTime_s", time.Now().Sub(st).Seconds())
 	} else {
 
 		var tiffbytes bytes.Buffer
 		tiffwriter := bufio.NewWriter(&tiffbytes)
 		err = tiff.Encode(tiffwriter, img, &tiff.Options{Compression: tiff.Deflate})
-		m.AddFloat64("EncodeTime_s", time.Now().Sub(st).Seconds())
 		if err != nil {
 			panic(err)
 		}
-
 		tiffwriter.Flush()
 		imageBytes = tiffbytes.Bytes()
+
+		m.AddFloat64("EncodeTime_s", time.Now().Sub(st).Seconds())
 
 	}
 	m.AddFloat64("OutputSize_b", time.Now().Sub(st).Seconds())
@@ -177,11 +182,9 @@ func capture(filePath string) {
 	if err = ioutil.WriteFile(filePath, imageBytes, 0665); err != nil {
 		panic(err)
 	}
-	errLog.Printf("Wrote %s\n", filePath)
-	m.AddTag("camera_name", name)
+	errLog.Printf("Wrote File %s\n", filePath)
 
 	telegrafClient.Write(m)
-	errLog.Printf("Wrote %s\n", m.ToLineProtocal())
 }
 
 
