@@ -172,7 +172,7 @@ func capture(filePath string) {
 		m.AddFloat64("EncodeTime_s", time.Now().Sub(st).Seconds())
 
 	}
-	m.AddFloat64("OutputSize_b", time.Now().Sub(st).Seconds())
+	m.AddInt("OutputSize_b", len(imageBytes))
 
 	dirPath := filepath.Dir(filePath)
 	if _, err := os.Stat(dirPath); os.IsNotExist(err) {
